@@ -45,3 +45,15 @@ Sets the HTML content for a Mailchimp campaign. Mailchimp will automatically gen
   }
   ```
 - **Example Output:** A confirmation text including the campaign ID and the length of the content set.
+
+### 4. `send_campaign`
+Sends a Mailchimp campaign to its audience.
+- **Safety Gate:** This tool requires a `confirm` flag set to `true`. If omitted or set to `false`, it performs a dry-run and will not send the campaign.
+- **Example Input:** 
+  ```json
+  { 
+    "campaign_id": "camp_123456",
+    "confirm": true
+  }
+  ```
+- **Example Output:** A success message confirming the campaign was sent, or an error if it was already sent.

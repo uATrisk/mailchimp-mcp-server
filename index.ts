@@ -281,6 +281,57 @@ server.registerTool(
   async (args) => setCampaignContentCore(args)
 );
 
+export const sendCampaignSchema = z.object({
+  campaign_id: z.string().describe("The unique ID of the campaign to send."),
+  confirm: z.boolean().default(false).describe("SAFETY GATE: You must explicitly set this to true to actually send the campaign to all recipients. If false, the tool will act as a dry run and do nothing.")
+});
+
+export const sendCampaignCore = withMailchimpErrorHandling(async (args: z.infer<typeof sendCampaignSchema>) => {
+  if (args.confirm !== true) {
+    return {
+      content: [{ type: "text", text: "Dry run: confirm flag was not set to true. The campaign was NOT sent. To actually send, call this tool again with \"confirm\": true." }]
+    };
+  }
+
+  const config = getMailchimpConfig();
+  const url = `${config.baseUrl}/campaigns/${args.campaign_id}/actions/send`;
+  
+  const response = await fetchWithRetry(url, {
+    method: "POST",
+    headers: mailchimpHeaders(config.apiKey),
+    body: ""
+  });
+
+  if (!response.ok) {
+    let errorMessage = `Mailchimp API error: ${response.status} ${response.statusText}`;
+    try {
+      const errorData = await response.json() as { detail?: string };
+      if (errorData && errorData.detail) {
+        errorMessage += ` - ${errorData.detail}`;
+      }
+    } catch (e) {
+      // Ignored if response isn't JSON
+    }
+    return {
+      isError: true,
+      content: [{ type: "text", text: errorMessage }]
+    };
+  }
+
+  return {
+    content: [{ type: "text", text: `Successfully sent campaign ${args.campaign_id}.` }]
+  };
+});
+
+server.registerTool(
+  "send_campaign",
+  {
+    description: "Send a Mailchimp campaign. IMPORTANT: You must explicitly pass confirm: true to actually send.",
+    inputSchema: sendCampaignSchema,
+  },
+  async (args) => sendCampaignCore(args)
+);
+
 if (process.argv[1] && import.meta.url === Bun.pathToFileURL(process.argv[1]).href) {
   try {
     getMailchimpConfig();

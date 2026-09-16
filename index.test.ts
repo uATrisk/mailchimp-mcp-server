@@ -1,5 +1,5 @@
 import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test";
-import { createCampaignCore, getDatacenter, sendTestEmailCore, sendTestEmailSchema, setCampaignContentCore } from "./index.ts";
+import { createCampaignCore, getDatacenter, sendTestEmailCore, sendTestEmailSchema, setCampaignContentCore, sendCampaignCore } from "./index.ts";
 
 describe("Mailchimp MCP Server Tools", () => {
   const originalFetch = global.fetch;
@@ -228,6 +228,65 @@ describe("Mailchimp MCP Server Tools", () => {
       });
 
       const result = await setCampaignContentCore(validArgs);
+
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toContain("Request to Mailchimp API timed out after 10 seconds.");
+    });
+  });
+
+  describe("send_campaign", () => {
+    const validArgs = {
+      campaign_id: "camp_123",
+      confirm: true
+    };
+
+    it("confirm omitted/false -> fetch is never called, response is not an error, dry-run message returned", async () => {
+      const result = await sendCampaignCore({ campaign_id: "camp_123", confirm: false });
+      
+      expect(result.isError).toBeUndefined();
+      expect(result.content?.[0]?.text).toContain("Dry run: confirm flag was not set to true. The campaign was NOT sent.");
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("confirm true -> fetch called exactly once with correct URL/method/headers, success message returned", async () => {
+      mockFetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+      const result = await sendCampaignCore(validArgs);
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content?.[0]?.text).toContain("Successfully sent campaign camp_123.");
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      const fetchCall = mockFetch.mock.calls[0] as [string | URL, RequestInit];
+      expect(fetchCall[0]).toBe("https://us6.api.mailchimp.com/3.0/campaigns/camp_123/actions/send");
+      expect(fetchCall[1]?.method).toBe("POST");
+      expect(fetchCall[1]?.body).toBe("");
+    });
+
+    it("confirm true + API 400 error -> error path returns formatted message, isError true", async () => {
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+        title: "Bad Request",
+        status: 400,
+        detail: "Cannot send a campaign that has already been sent.",
+        instance: "..."
+      }), { status: 400, statusText: "Bad Request" }));
+
+      const result = await sendCampaignCore(validArgs);
+
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toContain("Mailchimp API error: 400 Bad Request - Cannot send a campaign that has already been sent.");
+    });
+
+    it("confirm true + timeout (AbortError) -> standard timeout message, isError true", async () => {
+      mockFetch.mockImplementation(async () => {
+        return new Promise((_, reject) => {
+          const error = new Error("The operation was aborted");
+          error.name = "AbortError";
+          setTimeout(() => reject(error), 10);
+        });
+      });
+
+      const result = await sendCampaignCore(validArgs);
 
       expect(result.isError).toBe(true);
       expect(result.content?.[0]?.text).toContain("Request to Mailchimp API timed out after 10 seconds.");
