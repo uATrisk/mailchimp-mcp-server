@@ -179,6 +179,108 @@ server.registerTool(
   async (args) => createCampaignCore(args)
 );
 
+export const sendTestEmailSchema = z.object({
+  campaign_id: z.string().describe("The unique ID of the campaign to test."),
+  test_emails: z.array(z.string().email()).min(1).describe("An array of valid email addresses to send the test to."),
+  send_type: z.enum(["html", "plaintext"]).default("html").describe("The format of the test email (html or plaintext).")
+});
+
+export const sendTestEmailCore = withMailchimpErrorHandling(async (args: z.infer<typeof sendTestEmailSchema>) => {
+  const config = getMailchimpConfig();
+  const url = `${config.baseUrl}/campaigns/${args.campaign_id}/actions/test`;
+  
+  const payload = {
+    test_emails: args.test_emails,
+    send_type: args.send_type
+  };
+
+  const response = await fetchWithRetry(url, {
+    method: "POST",
+    headers: mailchimpHeaders(config.apiKey),
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    let errorMessage = `Mailchimp API error: ${response.status} ${response.statusText}`;
+    try {
+      const errorData = await response.json() as { detail?: string };
+      if (errorData && errorData.detail) {
+        errorMessage += ` - ${errorData.detail}`;
+      }
+    } catch (e) {
+      // Ignored if response isn't JSON
+    }
+    return {
+      isError: true,
+      content: [{ type: "text", text: errorMessage }]
+    };
+  }
+
+  return {
+    content: [{ type: "text", text: `Successfully sent test email for campaign ${args.campaign_id} to: ${args.test_emails.join(', ')}` }]
+  };
+});
+
+server.registerTool(
+  "send_test_email",
+  {
+    description: "Send a test email for a Mailchimp campaign.",
+    inputSchema: sendTestEmailSchema,
+  },
+  async (args) => sendTestEmailCore(args)
+);
+
+export const setCampaignContentSchema = z.object({
+  campaign_id: z.string().describe("The unique ID of the campaign to modify."),
+  html: z.string().describe("The raw HTML body of the email. Mailchimp will auto-generate the plain-text version if not separately provided.")
+});
+
+export const setCampaignContentCore = withMailchimpErrorHandling(async (args: z.infer<typeof setCampaignContentSchema>) => {
+  const config = getMailchimpConfig();
+  const url = `${config.baseUrl}/campaigns/${args.campaign_id}/content`;
+  
+  const payload = {
+    html: args.html
+  };
+
+  const response = await fetchWithRetry(url, {
+    method: "PUT",
+    headers: mailchimpHeaders(config.apiKey),
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    let errorMessage = `Mailchimp API error: ${response.status} ${response.statusText}`;
+    try {
+      const errorData = await response.json() as { detail?: string };
+      if (errorData && errorData.detail) {
+        errorMessage += ` - ${errorData.detail}`;
+      }
+    } catch (e) {
+      // Ignored if response isn't JSON
+    }
+    return {
+      isError: true,
+      content: [{ type: "text", text: errorMessage }]
+    };
+  }
+
+  await response.json(); // Consume the body
+  
+  return {
+    content: [{ type: "text", text: `Successfully set HTML content for campaign ${args.campaign_id} (Length: ${args.html.length} characters).` }]
+  };
+});
+
+server.registerTool(
+  "set_campaign_content",
+  {
+    description: "Set the HTML content for a Mailchimp campaign.",
+    inputSchema: setCampaignContentSchema,
+  },
+  async (args) => setCampaignContentCore(args)
+);
+
 if (process.argv[1] && import.meta.url === Bun.pathToFileURL(process.argv[1]).href) {
   try {
     getMailchimpConfig();
