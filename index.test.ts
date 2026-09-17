@@ -1,5 +1,5 @@
 import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test";
-import { createCampaignCore, getDatacenter, sendTestEmailCore, sendTestEmailSchema, setCampaignContentCore, sendCampaignCore } from "./index.ts";
+import { createCampaignCore, getDatacenter, sendTestEmailCore, sendTestEmailSchema, setCampaignContentCore, sendCampaignCore, listCampaignsCore, listCampaignsSchema, listAudiencesCore, listAudiencesSchema } from "./index.ts";
 
 describe("Mailchimp MCP Server Tools", () => {
   const originalFetch = global.fetch;
@@ -290,6 +290,120 @@ describe("Mailchimp MCP Server Tools", () => {
 
       expect(result.isError).toBe(true);
       expect(result.content?.[0]?.text).toContain("Request to Mailchimp API timed out after 10 seconds.");
+    });
+  });
+
+  describe("list_campaigns", () => {
+    it("successful call with campaigns", async () => {
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+        campaigns: [{
+          id: "camp_123",
+          status: "save",
+          type: "regular",
+          create_time: "2026-01-01T00:00:00+00:00",
+          archive_url: "https://us6.campaign-archive.com/test",
+          settings: {
+            title: "Test Campaign",
+            subject_line: "Test Subject"
+          }
+        }],
+        total_items: 1
+      }), { status: 200 }));
+
+      const result = await listCampaignsCore({ count: 10, offset: 0 });
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content?.[0]?.text).toContain("camp_123");
+      expect(result.content?.[0]?.text).toContain("Test Campaign");
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      const fetchCall = mockFetch.mock.calls[0] as [string | URL, RequestInit];
+      expect(fetchCall[0]).toBe("https://us6.api.mailchimp.com/3.0/campaigns?count=10&offset=0");
+      expect(fetchCall[1]?.method).toBe("GET");
+    });
+
+    it("successful call with empty list", async () => {
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+        campaigns: [],
+        total_items: 0
+      }), { status: 200 }));
+
+      const result = await listCampaignsCore({ count: 10, offset: 0 });
+
+      expect(result.isError).toBeUndefined();
+      const parsed = JSON.parse(result.content?.[0]?.text || "{}");
+      expect(parsed.campaigns).toHaveLength(0);
+      expect(parsed.total_items).toBe(0);
+    });
+
+    it("error handling path (API error)", async () => {
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+        title: "Bad Request",
+        status: 400,
+        detail: "Invalid parameters.",
+        instance: "..."
+      }), { status: 400, statusText: "Bad Request" }));
+
+      const result = await listCampaignsCore({ count: 10, offset: 0 });
+
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toContain("Mailchimp API error: 400 Bad Request - Invalid parameters.");
+    });
+  });
+
+  describe("list_audiences", () => {
+    it("successful call with audiences", async () => {
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+        lists: [{
+          id: "list_123",
+          name: "Test Audience",
+          stats: {
+            member_count: 50,
+            unsubscribe_count: 2
+          }
+        }],
+        total_items: 1
+      }), { status: 200 }));
+
+      const result = await listAudiencesCore({ count: 10, offset: 0 });
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content?.[0]?.text).toContain("list_123");
+      expect(result.content?.[0]?.text).toContain("Test Audience");
+      expect(result.content?.[0]?.text).toContain("50");
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      const fetchCall = mockFetch.mock.calls[0] as [string | URL, RequestInit];
+      expect(fetchCall[0]).toBe("https://us6.api.mailchimp.com/3.0/lists?count=10&offset=0");
+      expect(fetchCall[1]?.method).toBe("GET");
+    });
+
+    it("successful call with empty list", async () => {
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+        lists: [],
+        total_items: 0
+      }), { status: 200 }));
+
+      const result = await listAudiencesCore({ count: 10, offset: 0 });
+
+      expect(result.isError).toBeUndefined();
+      const parsed = JSON.parse(result.content?.[0]?.text || "{}");
+      expect(parsed.audiences).toHaveLength(0);
+      expect(parsed.total_items).toBe(0);
+    });
+
+    it("error handling path (API error)", async () => {
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+        title: "Bad Request",
+        status: 400,
+        detail: "Invalid parameters.",
+        instance: "..."
+      }), { status: 400, statusText: "Bad Request" }));
+
+      const result = await listAudiencesCore({ count: 10, offset: 0 });
+
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toContain("Mailchimp API error: 400 Bad Request - Invalid parameters.");
     });
   });
 });

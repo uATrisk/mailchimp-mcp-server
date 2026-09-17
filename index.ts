@@ -115,6 +115,10 @@ interface MailchimpCampaignResponse {
   type: string;
   create_time: string;
   archive_url: string;
+  settings?: {
+    title?: string;
+    subject_line?: string;
+  };
 }
 
 export const createCampaignCore = withMailchimpErrorHandling(async (args: z.infer<typeof createCampaignSchema>) => {
@@ -330,6 +334,133 @@ server.registerTool(
     inputSchema: sendCampaignSchema,
   },
   async (args) => sendCampaignCore(args)
+);
+
+export const listCampaignsSchema = z.object({
+  count: z.number().int().min(1).max(1000).default(10).describe("The number of campaigns to return."),
+  offset: z.number().int().min(0).default(0).describe("The number of campaigns to skip (for pagination).")
+});
+
+export const listCampaignsCore = withMailchimpErrorHandling(async (args: z.infer<typeof listCampaignsSchema>) => {
+  const config = getMailchimpConfig();
+  const url = `${config.baseUrl}/campaigns?count=${args.count}&offset=${args.offset}`;
+  
+  const response = await fetchWithRetry(url, {
+    method: "GET",
+    headers: mailchimpHeaders(config.apiKey)
+  });
+
+  if (!response.ok) {
+    let errorMessage = `Mailchimp API error: ${response.status} ${response.statusText}`;
+    try {
+      const errorData = await response.json() as { detail?: string };
+      if (errorData && errorData.detail) {
+        errorMessage += ` - ${errorData.detail}`;
+      }
+    } catch (e) {
+      // Ignored if response isn't JSON
+    }
+    return {
+      isError: true,
+      content: [{ type: "text", text: errorMessage }]
+    };
+  }
+
+  const data = await response.json() as { campaigns: MailchimpCampaignResponse[], total_items: number };
+  
+  const campaigns = (data.campaigns || []).map(c => ({
+    id: c.id,
+    title: c.settings?.title || c.settings?.subject_line || "Untitled",
+    status: c.status,
+    type: c.type,
+    create_time: c.create_time,
+    archive_url: c.archive_url
+  }));
+  
+  const result = {
+    campaigns,
+    total_items: data.total_items
+  };
+  
+  return {
+    content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+  };
+});
+
+server.registerTool(
+  "list_campaigns",
+  {
+    description: "List Mailchimp campaigns with pagination.",
+    inputSchema: listCampaignsSchema,
+  },
+  async (args) => listCampaignsCore(args)
+);
+
+export interface MailchimpAudienceResponse {
+  id: string;
+  name: string;
+  stats?: {
+    member_count: number;
+    unsubscribe_count: number;
+  };
+}
+
+export const listAudiencesSchema = z.object({
+  count: z.number().int().min(1).max(1000).default(10).describe("The number of audiences to return."),
+  offset: z.number().int().min(0).default(0).describe("The number of audiences to skip (for pagination).")
+});
+
+export const listAudiencesCore = withMailchimpErrorHandling(async (args: z.infer<typeof listAudiencesSchema>) => {
+  const config = getMailchimpConfig();
+  const url = `${config.baseUrl}/lists?count=${args.count}&offset=${args.offset}`;
+  
+  const response = await fetchWithRetry(url, {
+    method: "GET",
+    headers: mailchimpHeaders(config.apiKey)
+  });
+
+  if (!response.ok) {
+    let errorMessage = `Mailchimp API error: ${response.status} ${response.statusText}`;
+    try {
+      const errorData = await response.json() as { detail?: string };
+      if (errorData && errorData.detail) {
+        errorMessage += ` - ${errorData.detail}`;
+      }
+    } catch (e) {
+      // Ignored if response isn't JSON
+    }
+    return {
+      isError: true,
+      content: [{ type: "text", text: errorMessage }]
+    };
+  }
+
+  const data = await response.json() as { lists: MailchimpAudienceResponse[], total_items: number };
+  
+  const audiences = (data.lists || []).map(l => ({
+    id: l.id,
+    name: l.name,
+    member_count: l.stats?.member_count ?? 0,
+    unsubscribe_count: l.stats?.unsubscribe_count ?? 0
+  }));
+  
+  const result = {
+    audiences,
+    total_items: data.total_items
+  };
+  
+  return {
+    content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+  };
+});
+
+server.registerTool(
+  "list_audiences",
+  {
+    description: "List Mailchimp audiences (lists) with pagination.",
+    inputSchema: listAudiencesSchema,
+  },
+  async (args) => listAudiencesCore(args)
 );
 
 if (process.argv[1] && import.meta.url === Bun.pathToFileURL(process.argv[1]).href) {
