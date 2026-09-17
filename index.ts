@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { createHash } from "node:crypto";
 
 const server = new McpServer({
   name: "Mailchimp MCP Server",
@@ -463,7 +464,6 @@ server.registerTool(
   async (args) => listAudiencesCore(args)
 );
 
-
 export interface MailchimpReportResponse {
   id: string;
   campaign_title: string;
@@ -551,6 +551,130 @@ server.registerTool(
     inputSchema: getCampaignReportSchema,
   },
   async (args) => getCampaignReportCore(args)
+);
+
+export const subscribeMemberSchema = z.object({
+  list_id: z.string().describe("The ID of the audience (list) to subscribe the member to."),
+  email_address: z.string().email().describe("The email address of the new member."),
+  status: z.enum(["pending", "subscribed"]).default("pending").describe("The subscription status (defaults to pending for double opt-in).")
+});
+
+export const subscribeMemberCore = withMailchimpErrorHandling(async (args: z.infer<typeof subscribeMemberSchema>) => {
+  const config = getMailchimpConfig();
+  const subscriberHash = createHash("md5").update(args.email_address.toLowerCase()).digest("hex");
+  const url = `${config.baseUrl}/lists/${args.list_id}/members/${subscriberHash}`;
+  
+  const response = await fetchWithRetry(url, {
+    method: "PUT",
+    headers: mailchimpHeaders(config.apiKey),
+    body: JSON.stringify({
+      email_address: args.email_address,
+      status_if_new: args.status,
+      status: args.status
+    })
+  });
+
+  if (!response.ok) {
+    let errorMessage = `Mailchimp API error: ${response.status} ${response.statusText}`;
+    try {
+      const errorData = await response.json() as { detail?: string };
+      if (errorData && errorData.detail) {
+        errorMessage += ` - ${errorData.detail}`;
+      }
+    } catch (e) {
+      // Ignored if response isn't JSON
+    }
+    return {
+      isError: true,
+      content: [{ type: "text", text: errorMessage }]
+    };
+  }
+
+  const data = await response.json() as { id?: string; email_address?: string; status?: string };
+  
+  const result = {
+    id: data.id,
+    email_address: data.email_address,
+    status: data.status
+  };
+  
+  return {
+    content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+  };
+});
+
+server.registerTool(
+  "subscribe_member",
+  {
+    description: "Subscribe a member to a Mailchimp audience (list). Acts as an upsert (add or update).",
+    inputSchema: subscribeMemberSchema,
+  },
+  async (args) => subscribeMemberCore(args)
+);
+
+export const unsubscribeMemberSchema = z.object({
+  list_id: z.string().describe("The ID of the audience (list) to unsubscribe the member from."),
+  email_address: z.string().email().describe("The email address of the member to unsubscribe."),
+  confirm: z.boolean().optional().describe("MUST be set to true to execute. If omitted or false, performs a dry-run.")
+});
+
+export const unsubscribeMemberCore = withMailchimpErrorHandling(async (args: z.infer<typeof unsubscribeMemberSchema>) => {
+  if (!args.confirm) {
+    return {
+      content: [{ type: "text", text: `Dry run successful. To execute the unsubscribe operation for ${args.email_address}, you must pass confirm: true.` }]
+    };
+  }
+
+  const config = getMailchimpConfig();
+  const subscriberHash = createHash("md5").update(args.email_address.toLowerCase()).digest("hex");
+  const url = `${config.baseUrl}/lists/${args.list_id}/members/${subscriberHash}`;
+  
+  const response = await fetchWithRetry(url, {
+    method: "PUT",
+    headers: mailchimpHeaders(config.apiKey),
+    body: JSON.stringify({
+      email_address: args.email_address,
+      status_if_new: "unsubscribed",
+      status: "unsubscribed"
+    })
+  });
+
+  if (!response.ok) {
+    let errorMessage = `Mailchimp API error: ${response.status} ${response.statusText}`;
+    try {
+      const errorData = await response.json() as { detail?: string };
+      if (errorData && errorData.detail) {
+        errorMessage += ` - ${errorData.detail}`;
+      }
+    } catch (e) {
+      // Ignored if response isn't JSON
+    }
+    return {
+      isError: true,
+      content: [{ type: "text", text: errorMessage }]
+    };
+  }
+
+  const data = await response.json() as { id?: string; email_address?: string; status?: string };
+  
+  const result = {
+    id: data.id,
+    email_address: data.email_address,
+    status: data.status
+  };
+  
+  return {
+    content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
+  };
+});
+
+server.registerTool(
+  "unsubscribe_member",
+  {
+    description: "Unsubscribe a member from a Mailchimp audience (list). Acts as an upsert (add or update) with unsubscribed status. Requires confirm: true.",
+    inputSchema: unsubscribeMemberSchema,
+  },
+  async (args) => unsubscribeMemberCore(args)
 );
 
 if (process.argv[1] && import.meta.url === Bun.pathToFileURL(process.argv[1]).href) {

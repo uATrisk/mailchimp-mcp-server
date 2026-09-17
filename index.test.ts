@@ -1,5 +1,5 @@
 import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test";
-import { createCampaignCore, getDatacenter, sendTestEmailCore, sendTestEmailSchema, setCampaignContentCore, sendCampaignCore, listCampaignsCore, listCampaignsSchema, listAudiencesCore, listAudiencesSchema, getCampaignReportCore, getCampaignReportSchema } from "./index.ts";
+import { createCampaignCore, getDatacenter, sendTestEmailCore, sendTestEmailSchema, setCampaignContentCore, sendCampaignCore, listCampaignsCore, listCampaignsSchema, listAudiencesCore, listAudiencesSchema, getCampaignReportCore, getCampaignReportSchema, subscribeMemberCore, subscribeMemberSchema, unsubscribeMemberCore, unsubscribeMemberSchema } from "./index.ts";
 
 describe("Mailchimp MCP Server Tools", () => {
   const originalFetch = global.fetch;
@@ -471,6 +471,138 @@ describe("Mailchimp MCP Server Tools", () => {
 
       expect(result.isError).toBe(true);
       expect(result.content?.[0]?.text).toContain("Mailchimp API error: 500 Internal Server Error - Something went wrong.");
+    });
+  });
+
+  describe("subscribe_member", () => {
+    it("successful call defaults status to pending", async () => {
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+        id: "member_123",
+        email_address: "test@example.com",
+        status: "pending"
+      }), { status: 200 }));
+
+      // Without explicit status, zod schema defaults to "pending"
+      const result = await subscribeMemberCore(subscribeMemberSchema.parse({ 
+        list_id: "list_123", 
+        email_address: "test@Example.com" 
+      }));
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content?.[0]?.text).toContain("member_123");
+      expect(result.content?.[0]?.text).toContain("pending");
+      
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const fetchCall = mockFetch.mock.calls[0] as [string | URL, RequestInit];
+      
+      // MD5 of "test@example.com" is 55502f40dc8b7c769880b10874abc9d0
+      expect(fetchCall[0]).toContain("55502f40dc8b7c769880b10874abc9d0");
+      expect(fetchCall[0]).toBe("https://us6.api.mailchimp.com/3.0/lists/list_123/members/55502f40dc8b7c769880b10874abc9d0");
+      expect(fetchCall[1]?.method).toBe("PUT");
+      
+      const body = JSON.parse(fetchCall[1]?.body as string);
+      expect(body.email_address).toBe("test@Example.com");
+      expect(body.status).toBe("pending");
+      expect(body.status_if_new).toBe("pending");
+    });
+
+    it("successful call with explicit subscribed override", async () => {
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+        id: "member_123",
+        email_address: "override@example.com",
+        status: "subscribed"
+      }), { status: 200 }));
+
+      const result = await subscribeMemberCore({ 
+        list_id: "list_123", 
+        email_address: "override@example.com",
+        status: "subscribed"
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content?.[0]?.text).toContain("subscribed");
+      
+      const fetchCall = mockFetch.mock.calls[0] as [string | URL, RequestInit];
+      const body = JSON.parse(fetchCall[1]?.body as string);
+      expect(body.status).toBe("subscribed");
+    });
+
+    it("error handling path (API error)", async () => {
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+        title: "Bad Request",
+        status: 400,
+        detail: "Invalid email format.",
+        instance: "..."
+      }), { status: 400, statusText: "Bad Request" }));
+
+      const result = await subscribeMemberCore({ 
+        list_id: "list_123", 
+        email_address: "bademail",
+        status: "pending"
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toContain("Mailchimp API error: 400 Bad Request - Invalid email format.");
+    });
+  });
+
+  describe("unsubscribe_member", () => {
+    it("confirm omitted/false -> fetch is never called, dry-run message returned", async () => {
+      const result = await unsubscribeMemberCore({ 
+        list_id: "list_123", 
+        email_address: "test@example.com" 
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content?.[0]?.text).toContain("Dry run successful.");
+      expect(result.content?.[0]?.text).toContain("confirm: true");
+      expect(mockFetch).toHaveBeenCalledTimes(0);
+    });
+
+    it("successful unsubscribe when confirm is true", async () => {
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+        id: "member_123",
+        email_address: "test@example.com",
+        status: "unsubscribed"
+      }), { status: 200 }));
+
+      const result = await unsubscribeMemberCore({ 
+        list_id: "list_123", 
+        email_address: "test@Example.com",
+        confirm: true
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content?.[0]?.text).toContain("unsubscribed");
+      
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      const fetchCall = mockFetch.mock.calls[0] as [string | URL, RequestInit];
+      
+      // MD5 of "test@example.com" is 55502f40dc8b7c769880b10874abc9d0
+      expect(fetchCall[0]).toContain("55502f40dc8b7c769880b10874abc9d0");
+      expect(fetchCall[1]?.method).toBe("PUT");
+      
+      const body = JSON.parse(fetchCall[1]?.body as string);
+      expect(body.status).toBe("unsubscribed");
+      expect(body.status_if_new).toBe("unsubscribed");
+    });
+
+    it("error handling path (API error) when confirm is true", async () => {
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+        title: "Bad Request",
+        status: 400,
+        detail: "Invalid email format.",
+        instance: "..."
+      }), { status: 400, statusText: "Bad Request" }));
+
+      const result = await unsubscribeMemberCore({ 
+        list_id: "list_123", 
+        email_address: "bademail",
+        confirm: true
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toContain("Mailchimp API error: 400 Bad Request - Invalid email format.");
     });
   });
 });
