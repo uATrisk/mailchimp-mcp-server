@@ -1,5 +1,5 @@
 import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test";
-import { createCampaignCore, getDatacenter, sendTestEmailCore, sendTestEmailSchema, setCampaignContentCore, sendCampaignCore, listCampaignsCore, listCampaignsSchema, listAudiencesCore, listAudiencesSchema } from "./index.ts";
+import { createCampaignCore, getDatacenter, sendTestEmailCore, sendTestEmailSchema, setCampaignContentCore, sendCampaignCore, listCampaignsCore, listCampaignsSchema, listAudiencesCore, listAudiencesSchema, getCampaignReportCore, getCampaignReportSchema } from "./index.ts";
 
 describe("Mailchimp MCP Server Tools", () => {
   const originalFetch = global.fetch;
@@ -404,6 +404,73 @@ describe("Mailchimp MCP Server Tools", () => {
 
       expect(result.isError).toBe(true);
       expect(result.content?.[0]?.text).toContain("Mailchimp API error: 400 Bad Request - Invalid parameters.");
+    });
+  });
+
+  describe("get_campaign_report", () => {
+    it("successful call with report data", async () => {
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+        id: "camp_123",
+        campaign_title: "Test Campaign",
+        emails_sent: 100,
+        unsubscribed: 2,
+        opens: {
+          opens_total: 50,
+          unique_opens: 40,
+          open_rate: 0.4
+        },
+        clicks: {
+          clicks_total: 10,
+          unique_clicks: 8,
+          click_rate: 0.08
+        },
+        bounces: {
+          hard_bounces: 1,
+          soft_bounces: 0,
+          syntax_errors: 0
+        }
+      }), { status: 200 }));
+
+      const result = await getCampaignReportCore({ campaign_id: "camp_123" });
+
+      expect(result.isError).toBeUndefined();
+      expect(result.content?.[0]?.text).toContain("camp_123");
+      expect(result.content?.[0]?.text).toContain("0.4");
+      expect(result.content?.[0]?.text).toContain("40");
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      const fetchCall = mockFetch.mock.calls[0] as [string | URL, RequestInit];
+      expect(fetchCall[0]).toBe("https://us6.api.mailchimp.com/3.0/reports/camp_123");
+      expect(fetchCall[1]?.method).toBe("GET");
+    });
+
+    it("campaign not found or not sent yet (404 response)", async () => {
+      // Mailchimp returns a 404 if the campaign doesn't exist or hasn't generated a report resource yet (e.g., not sent)
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+        title: "Resource Not Found",
+        status: 404,
+        detail: "The requested resource could not be found.",
+        instance: "..."
+      }), { status: 404, statusText: "Not Found" }));
+
+      const result = await getCampaignReportCore({ campaign_id: "unsent_camp" });
+
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toContain("Mailchimp API error: 404 Not Found - The requested resource could not be found.");
+    });
+
+    it("error handling path (generic API error)", async () => {
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+        title: "Internal Server Error",
+        status: 500,
+        detail: "Something went wrong.",
+        instance: "..."
+      }), { status: 500, statusText: "Internal Server Error" }));
+
+      const result = await getCampaignReportCore({ campaign_id: "camp_123" });
+
+      expect(result.isError).toBe(true);
+      expect(result.content?.[0]?.text).toContain("Mailchimp API error: 500 Internal Server Error - Something went wrong.");
     });
   });
 });

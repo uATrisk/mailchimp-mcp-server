@@ -463,6 +463,96 @@ server.registerTool(
   async (args) => listAudiencesCore(args)
 );
 
+
+export interface MailchimpReportResponse {
+  id: string;
+  campaign_title: string;
+  emails_sent: number;
+  unsubscribed: number;
+  bounces?: {
+    hard_bounces: number;
+    soft_bounces: number;
+    syntax_errors: number;
+  };
+  opens?: {
+    opens_total: number;
+    unique_opens: number;
+    open_rate: number;
+  };
+  clicks?: {
+    clicks_total: number;
+    unique_clicks: number;
+    click_rate: number;
+  };
+}
+
+export const getCampaignReportSchema = z.object({
+  campaign_id: z.string().describe("The ID of the campaign to get the report for.")
+});
+
+export const getCampaignReportCore = withMailchimpErrorHandling(async (args: z.infer<typeof getCampaignReportSchema>) => {
+  const config = getMailchimpConfig();
+  const url = `${config.baseUrl}/reports/${args.campaign_id}`;
+  
+  const response = await fetchWithRetry(url, {
+    method: "GET",
+    headers: mailchimpHeaders(config.apiKey)
+  });
+
+  if (!response.ok) {
+    let errorMessage = `Mailchimp API error: ${response.status} ${response.statusText}`;
+    try {
+      const errorData = await response.json() as { detail?: string };
+      if (errorData && errorData.detail) {
+        errorMessage += ` - ${errorData.detail}`;
+      }
+    } catch (e) {
+      // Ignored if response isn't JSON
+    }
+    return {
+      isError: true,
+      content: [{ type: "text", text: errorMessage }]
+    };
+  }
+
+  const data = await response.json() as MailchimpReportResponse;
+  
+  const report = {
+    id: data.id,
+    campaign_title: data.campaign_title,
+    emails_sent: data.emails_sent,
+    unsubscribed: data.unsubscribed,
+    opens: data.opens ? {
+      total: data.opens.opens_total,
+      unique: data.opens.unique_opens,
+      rate: data.opens.open_rate
+    } : undefined,
+    clicks: data.clicks ? {
+      total: data.clicks.clicks_total,
+      unique: data.clicks.unique_clicks,
+      rate: data.clicks.click_rate
+    } : undefined,
+    bounces: data.bounces ? {
+      hard: data.bounces.hard_bounces,
+      soft: data.bounces.soft_bounces,
+      syntax: data.bounces.syntax_errors
+    } : undefined
+  };
+  
+  return {
+    content: [{ type: "text", text: JSON.stringify(report, null, 2) }]
+  };
+});
+
+server.registerTool(
+  "get_campaign_report",
+  {
+    description: "Get performance stats (opens, clicks, bounces, etc.) for a sent Mailchimp campaign.",
+    inputSchema: getCampaignReportSchema,
+  },
+  async (args) => getCampaignReportCore(args)
+);
+
 if (process.argv[1] && import.meta.url === Bun.pathToFileURL(process.argv[1]).href) {
   try {
     getMailchimpConfig();
